@@ -5,7 +5,7 @@ import pytest
 from celery.contrib.testing.worker import start_worker  # type: ignore
 from celery.utils.time import adjust_timestamp  # type: ignore
 
-from src.exporter import reverse_adjust_timestamp
+from src.exporter import Exporter, reverse_adjust_timestamp
 
 
 @pytest.fixture
@@ -194,6 +194,32 @@ def test_purge_offline_worker_metrics(
             labels={"hostname": hostname, "queue_name": "test", "name": "boosh"},
         )
         == expected_metric_value
+    )
+
+
+def test_worker_offline_event_does_not_recreate_purged_metric(hostname):
+    exporter = Exporter()
+    exporter.track_worker_status(
+        {"hostname": hostname, "timestamp": time.time(), "utcoffset": 0}, True
+    )
+    exporter.purge_worker_metrics(hostname)
+
+    assert (
+        exporter.registry.get_sample_value(
+            "celery_worker_up", labels={"hostname": hostname}
+        )
+        is None
+    )
+
+    exporter.track_worker_status(
+        {"hostname": hostname, "timestamp": time.time(), "utcoffset": 0}, False
+    )
+
+    assert (
+        exporter.registry.get_sample_value(
+            "celery_worker_up", labels={"hostname": hostname}
+        )
+        is None
     )
 
 

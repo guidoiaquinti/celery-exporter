@@ -322,9 +322,11 @@ class Exporter:  # pylint: disable=too-many-instance-attributes,too-many-branche
         event_name = "worker-online" if is_online else "worker-offline"
         hostname = get_hostname(event["hostname"])
         logger.debug("Received event='{}' for hostname='{}'", event_name, hostname)
-        self.celery_worker_up.labels(hostname=hostname, **self.static_label).set(value)
 
         if is_online:
+            self.celery_worker_up.labels(hostname=hostname, **self.static_label).set(
+                value
+            )
             self.worker_last_seen[hostname] = {
                 "ts": reverse_adjust_timestamp(
                     event["timestamp"], event.get("utcoffset")
