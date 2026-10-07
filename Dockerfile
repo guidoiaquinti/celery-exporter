@@ -5,16 +5,12 @@ ENV PYTHONUNBUFFERED=1 \
     POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=1 \
     POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_VIRTUALENVS_OPTIONS_NO_PIP=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
 WORKDIR /app/
 COPY pyproject.toml poetry.lock /app/
-RUN apt-get update && \
-    apt-get -y dist-upgrade && \
-    apt install -y locales libcurl4-openssl-dev libssl-dev build-essential && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip install -U pip poetry && \
+RUN pip install poetry && \
     poetry install --without dev --no-root && \
     rm -rf $POETRY_CACHE_DIR
 
@@ -30,7 +26,9 @@ COPY . /app/
 
 EXPOSE 9808
 
-RUN adduser --disabled-login exporter
+# pip isn't needed at runtime, and its vendored dependencies trip vulnerability scanners.
+RUN /usr/local/bin/python -m pip uninstall --yes pip && \
+    adduser --disabled-login exporter
 
 USER exporter
 

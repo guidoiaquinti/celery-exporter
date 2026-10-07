@@ -1,0 +1,97 @@
+name: Docker
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "pyproject.toml"
+      - "poetry.lock"
+      - "cli.py"
+      - "src/**"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "pyproject.toml"
+      - "poetry.lock"
+      - "cli.py"
+      - "src/**"
+      - ".github/workflows/docker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    # Build each platform the release publishes on a native runner instead of under QEMU.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            trivy-asset: Linux-64bit
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            trivy-asset: Linux-ARM64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          push: false
+          load: true
+          tags: celery-exporter:ci
+          # A scope separate from the release workflow's, so PR builds never feed its cache.
+          cache-from: type=gha,scope=docker-ci-${{ matrix.arch }}
+          cache-to: type=gha,scope=docker-ci-${{ matrix.arch }},mode=max
+
+      - name: Smoke test
+        # Importing the CLI loads every runtime dependency, so this catches a broken venv.
+        run: docker run --rm celery-exporter:ci --help
+
+      - name: Download and verify Trivy
+        # Installed from the release binary rather than aquasecurity/trivy-action, with the
+        # same download hardening as actionlint in github-workflows.yml.
+        env:
+          TRIVY_VERSION: 0.74.0
+          TRIVY_ASSET: ${{ matrix.trivy-asset }}
+        run: |
+          set -euo pipefail
+          asset="trivy_${TRIVY_VERSION}_${TRIVY_ASSET}.tar.gz"
+          base_url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+
+          curl --fail --silent --show-error --location --retry 5 --retry-connrefused --retry-max-time 300 --max-time 120 \
+            -o "$asset" "${base_url}/${asset}"
+          curl --fail --silent --show-error --location --retry 5 --retry-connrefused --retry-max-time 300 --max-time 30 \
+            -o checksums.txt "${base_url}/trivy_${TRIVY_VERSION}_checksums.txt"
+
+          grep "  ${asset}\$" checksums.txt | sha256sum -c -
+          tar -xzf "$asset" trivy
+
+      - name: Scan for vulnerabilities
+        run: ./trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --no-progress celery-exporter:ci
